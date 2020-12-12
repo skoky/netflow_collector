@@ -32,12 +32,12 @@ unsafe impl Send for JSONWriter {}
 unsafe impl Sync for JSONWriter {}
 
 struct JSONWriter {
-    writer: Box<Writer>,
+    writer: Box<dyn Writer>,
     // It will recieve the json with data
     rx: Receiver<String>
 }
 
-// Since we're using the 
+// Since we're using the
 impl Future for JSONWriter {
     type Item = ();
     type Error = ();
@@ -62,7 +62,7 @@ struct NFCollector;
 impl UdpCodec for NFCollector {
     type In = (SocketAddr, Vec<u8>);
     type Out = (SocketAddr, Vec<u8>);
-    
+
     fn decode(&mut self, addr: &SocketAddr, buf: &[u8]) -> io::Result<Self::In> {
         Ok((*addr, buf.to_vec()))
     }
@@ -113,32 +113,32 @@ fn main() {
     };
 
 
-    
+
     let writer = FileWriter::new(Path::new(out_file)).map_err(|err| {
         log.info(&format!("Failed to open {}: {}", out_file, err));
         std::process::exit(1);
     }).unwrap();
-    
+
     let addr: SocketAddr = address_and_port.parse().unwrap();
 
     let mut core = Core::new().unwrap();
     let handle = core.handle();
     let (tx, rx) = mpsc::channel();
-    
+
     let mut cc = Parser::new();
-    
+
     // Bind both our sockets and then figure out what ports we got.
     let collector = UdpSocket::bind(&addr, &handle).map_err(|_| {
         log.info(&format!("Failed to bind to {}. Exiting...",addr));
         std::process::exit(1);
     }).unwrap();
-    
+
     log.info(&format!("Connected to {}", addr));
     let (_, stream) = collector.framed(NFCollector).split();
 
     let stream = stream.for_each(move |(addr, message)| {
-        
-        match cc.parse_netflow_packet(&message, &addr) {   
+
+        match cc.parse_netflow_packet(&message, &addr.ip()) {
             Ok(sets) => {
                 for s in sets {
                     let x = s.to_json();
