@@ -2,9 +2,10 @@ extern crate tokio_core;
 extern crate futures;
 extern crate futures_cpupool;
 extern crate time;
-extern crate netflow_v9;
+// extern crate netflow_v9;
 extern crate clap;
 extern crate syslog;
+extern crate ipfix;
 
 mod writer;
 mod file_writer;
@@ -13,49 +14,50 @@ mod log;
 use std::io;
 use std::net::SocketAddr;
 use std::path::Path;
-use std::sync::mpsc::{self, Receiver};
+// use std::sync::mpsc::{self, Receiver};
 use clap::{Arg, App};
 
 
-use futures::{Future, Poll, Async};
+// use futures::{Future, Poll, Async};
 use futures::{Stream};
 use tokio_core::net::{UdpSocket, UdpCodec};
 use tokio_core::reactor::Core;
-use netflow_v9::{Parser};
+// use netflow_v9::{Parser};
 
-use writer::Writer;
+// use writer::Writer;
 use file_writer::FileWriter;
 use log::Log;
+use ipfix::{IpfixConsumer, IpfixPrinter};
 
 // Needed for CpuPool::executor() if needs be
-unsafe impl Send for JSONWriter {}
-unsafe impl Sync for JSONWriter {}
+// unsafe impl Send for JSONWriter {}
+// unsafe impl Sync for JSONWriter {}
 
-struct JSONWriter {
-    writer: Box<dyn Writer>,
-    // It will recieve the json with data
-    rx: Receiver<String>
-}
+// struct JSONWriter {
+//     writer: Box<dyn Writer>,
+//     // It will recieve the json with data
+//     // rx: Receiver<String>
+// }
 
 // Since we're using the
-impl Future for JSONWriter {
-    type Item = ();
-    type Error = ();
-
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        //let timeout = Duration::new(5, 0);
-        loop {
-            match self.rx.recv() {
-                Ok(x) => {
-                    self.writer.append(&x);
-                },
-                Err(_) => {
-                    return Ok(Async::NotReady)
-                }
-            }
-        }
-    }
-}
+// impl Future for JSONWriter {
+//     type Item = ();
+//     type Error = ();
+//
+//     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+//         //let timeout = Duration::new(5, 0);
+//         loop {
+//             match self.rx.recv() {
+//                 Ok(x) => {
+//                     self.writer.append(&x);
+//                 },
+//                 Err(_) => {
+//                     return Ok(Async::NotReady)
+//                 }
+//             }
+//         }
+//     }
+// }
 
 struct NFCollector;
 
@@ -75,7 +77,7 @@ impl UdpCodec for NFCollector {
 
 fn main() {
 
-    let matches = App::new("Netflow colector")
+    let matches = App::new("Netflow collector")
         .version("0.1.0")
         .author("\"Kris\" kris@catdamnit.com")
         .about("Netflow collector")
@@ -112,9 +114,7 @@ fn main() {
         address_and_port
     };
 
-
-
-    let writer = FileWriter::new(Path::new(out_file)).map_err(|err| {
+    let _writer = FileWriter::new(Path::new(out_file)).map_err(|err| {
         log.info(&format!("Failed to open {}: {}", out_file, err));
         std::process::exit(1);
     }).unwrap();
@@ -123,9 +123,11 @@ fn main() {
 
     let mut core = Core::new().unwrap();
     let handle = core.handle();
-    let (tx, rx) = mpsc::channel();
+    // let (tx, rx) = mpsc::channel();
 
-    let mut cc = Parser::new();
+    // let mut cc = Parser::new();
+    let mut parser = IpfixConsumer::new();
+    let printer = IpfixPrinter::new();
 
     // Bind both our sockets and then figure out what ports we got.
     let collector = UdpSocket::bind(&addr, &handle).map_err(|_| {
@@ -136,15 +138,20 @@ fn main() {
     log.info(&format!("Connected to {}", addr));
     let (_, stream) = collector.framed(NFCollector).split();
 
-    let stream = stream.for_each(move |(addr, message)| {
+    let stream = stream.for_each(move |(_addr, message)| {
 
-        match cc.parse_netflow_packet(&message, &addr.ip()) {
+        match parser.parse_message(&message) {
             Ok(sets) => {
                 for s in sets {
-                    let x = s.to_json();
-                    if let Err(err) = tx.send(x) {
-                        log.info(&format!("Error sending over tx channel: {}", err));
+                    let x = printer.print_json(s);
+                    // if let Err(err) = tx.send(x) {
+                    //     log.info(&format!("Error sending over tx channel: {}", err));
+                    // }
+                    let mut test_string = String::new();
+                    for flow in x {
+                        test_string += &flow;
                     }
+                    println!("{}",test_string);
                 }
             }
             Err(e) => log.info(&format!("Error parsing netflow packet: {}", e))
@@ -152,11 +159,11 @@ fn main() {
 
         Ok(())
     });
-    let mut j_writer = JSONWriter{writer: Box::new(writer), rx: rx};
+    // let mut j_writer = JSONWriter{writer: Box::new(writer), rx: rx};
 
-    std::thread::spawn(move || {
-        j_writer.poll().unwrap();
-    });
+    // std::thread::spawn(move || {
+    //     j_writer.poll().unwrap();
+    // });
 
     drop(core.run(stream));
 }
